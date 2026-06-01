@@ -1,14 +1,14 @@
 <?php
 
-namespace App\Models;
+namespace App\Models\v1;
 
 use Illuminate\Database\Eloquent\Model;
 
 class PostsModel extends Model
 {
     protected $table = "id9j49_posts";
-
-    public $timestamps = false; // WordPress uses its own date columns
+    protected $primaryKey = "ID";
+    public $timestamps = false;
 
     protected $fillable = [
         "post_author",
@@ -35,15 +35,9 @@ class PostsModel extends Model
         "comment_count"
     ];
 
-    // Optional: Casts for specific columns
-    protected $casts = [
-        "post_author" => "integer",
-        "post_parent" => "integer",
-        "menu_order" => "integer",
-        "comment_count" => "integer",
-        "post_date" => "datetime",
-        "post_date_gmt" => "datetime",
-        "post_modified" => "datetime",
-        "post_modified_gmt" => "datetime"
-    ];
+    // Add this relationship
+    public function meta()
+    {
+        return $this->hasMany(PostMetaModel::class, 'post_id', 'ID');
+    }
 }

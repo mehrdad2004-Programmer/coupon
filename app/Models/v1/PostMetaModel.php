@@ -1,13 +1,13 @@
 <?php
 
-namespace App\Models;
+namespace App\Models\v1;
 
 use Illuminate\Database\Eloquent\Model;
 
 class PostMetaModel extends Model
 {
     protected $table = "id9j49_postmeta";
-    protected $primaryKey = "ID";
+    protected $primaryKey = "meta_id";  // Add this line
 
     public $timestamps = false;
 
