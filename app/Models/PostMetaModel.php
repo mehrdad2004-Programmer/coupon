@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class PostMetaModel extends Model
 {
     protected $table = "id9j49_postmeta";
+    protected $primaryKey = "ID";
 
     public $timestamps = false;
 
