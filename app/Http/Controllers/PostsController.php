@@ -114,6 +114,161 @@ class PostsController extends Controller
         }
     }
 
+    // User sends: { "group_id": 123, "product_ids": [123,456,789], "amount": 20, "discount_type": "percent" }
+    public function updateProductsInGroup(Request $request){
+        try{
+            $groupId = $request->input('group_id');
+            $productIds = $request->input('product_ids');
+            $amount = $request->input('amount');
+            $discountType = $request->input('discount_type');
+
+            $productIdsString = implode(',', $productIds);
+
+            // Update or create product_ids
+            PostMetaModel::updateOrCreate(
+                ["post_id" => $groupId, "meta_key" => "product_ids"],
+                ["meta_value" => $productIdsString]
+            );
+
+            // Update or create coupon_amount
+            PostMetaModel::updateOrCreate(
+                ["post_id" => $groupId, "meta_key" => "coupon_amount"],
+                ["meta_value" => $amount]
+            );
+
+            // Update or create discount_type
+            PostMetaModel::updateOrCreate(
+                ["post_id" => $groupId, "meta_key" => "discount_type"],
+                ["meta_value" => $discountType]
+            );
+
+            return response()->json([
+                "msg" => "Group products updated successfully",
+                "statuscode" => 200
+            ], 200);
+
+        } catch(\Exception $e){
+            return response()->json([
+                "msg" => $e->getMessage(),
+                "statuscode" => 500
+            ], 500);
+        }
+    }
+
+    // User sends: { "group_id": 123 }
+    // OR { "group_id": 123, "delete_type": "all" }
+    public function deleteProductsFromGroup(Request $request){
+        try{
+            $groupId = $request->input('group_id');
+            $deleteType = $request->input('delete_type', 'all'); // 'all' or 'specific'
+            $specificProductIds = $request->input('product_ids'); // For specific delete
+
+            if($deleteType == 'all'){
+                // Delete all group product associations
+                PostMetaModel::where("post_id", $groupId)
+                    ->whereIn("meta_key", ["product_ids", "coupon_amount", "discount_type"])
+                    ->delete();
+
+                return response()->json([
+                    "msg" => "All products removed from group",
+                    "statuscode" => 200
+                ], 200);
+            }
+
+            if($deleteType == 'specific' && $specificProductIds){
+                // Get existing product_ids
+                $existing = PostMetaModel::where("post_id", $groupId)
+                    ->where("meta_key", "product_ids")
+                    ->first();
+
+                if($existing){
+                    $existingIds = explode(',', $existing->meta_value);
+                    $remainingIds = array_diff($existingIds, $specificProductIds);
+
+                    if(count($remainingIds) > 0){
+                        $remainingString = implode(',', $remainingIds);
+                        $existing->update(["meta_value" => $remainingString]);
+                    } else {
+                        $existing->delete();
+                    }
+                }
+
+                return response()->json([
+                    "msg" => "Specific products removed from group",
+                    "statuscode" => 200
+                ], 200);
+            }
+
+            return response()->json([
+                "msg" => "Invalid delete type or missing product_ids",
+                "statuscode" => 400
+            ], 400);
+
+        } catch(\Exception $e){
+            return response()->json([
+                "msg" => $e->getMessage(),
+                "statuscode" => 500
+            ], 500);
+        }
+    }
+
+    // User sends: { "group_id": 123 }
+    public function getProductsInGroup(Request $request){
+        try{
+            $groupId = $request->input('group_id');
+
+            // Get product_ids from group meta
+            $productIdsMeta = PostMetaModel::where("post_id", $groupId)
+                ->where("meta_key", "product_ids")
+                ->first();
+
+            if(!$productIdsMeta){
+                return response()->json([
+                    "msg" => "No products found in this group",
+                    "statuscode" => 404
+                ], 404);
+            }
+
+            $productIdsString = $productIdsMeta->meta_value;
+            $productIds = explode(',', $productIdsString);
+
+            // Get full product details from posts table
+            $products = PostsModel::whereIn("ID", $productIds)
+                ->where("post_type", "product")
+                ->get(['ID', 'post_title', 'post_name']);
+
+            // Get group discount info
+            $amount = PostMetaModel::where("post_id", $groupId)
+                ->where("meta_key", "coupon_amount")
+                ->first();
+
+            $discountType = PostMetaModel::where("post_id", $groupId)
+                ->where("meta_key", "discount_type")
+                ->first();
+
+            return response()->json([
+                "msg" => "Products retrieved successfully",
+                "data" => [
+                    "group_id" => $groupId,
+                    "product_ids" => $productIds,
+                    "products" => $products,
+                    "discount" => [
+                        "amount" => $amount ? $amount->meta_value : null,
+                        "type" => $discountType ? $discountType->meta_value : null
+                    ]
+                ],
+                "statuscode" => 200
+            ], 200);
+
+        } catch(\Exception $e){
+            return response()->json([
+                "msg" => $e->getMessage(),
+                "statuscode" => 500
+            ], 500);
+        }
+    }
+
+    // get all products without and limit on their groups
     public function getProducts(){
         try{
             $data = PostsModel::where("post_type", "product")->get();
@@ -220,6 +375,116 @@ class PostsController extends Controller
                 "expires_in" => $expiryHours . " hours",
                 "statuscode" => 201
             ], 201);
+
+        } catch(\Exception $e){
+            return response()->json([
+                "msg" => $e->getMessage(),
+                "statuscode" => 500
+            ], 500);
+        }
+    }
+
+    // User sends: { "organ_id": 123, "filter": "all" } // filter: all, used, unused
+    public function getDiscountCodesByOrgan(Request $request){
+        try{
+            $organId = $request->input('organ_id');
+            $filter = $request->input('filter', 'all'); // all, used, unused
+
+            // Get organ prefix to identify its tokens
+            $organPrefix = PostMetaModel::where("post_id", $organId)
+                ->where("meta_key", "_prefix")
+                ->first();
+
+            if(!$organPrefix){
+                return response()->json([
+                    "msg" => "No prefix found for this organ",
+                    "statuscode" => 404
+                ], 404);
+            }
+
+            $prefix = $organPrefix->meta_value;
+
+            // Find all coupon posts that start with this prefix
+            $coupons = PostsModel::where("post_type", "shop_coupon")
+                ->where("post_title", "LIKE", $prefix . "_%")
+                ->get(['ID', 'post_title', 'post_date', 'post_modified']);
+
+            if($coupons->isEmpty()){
+                return response()->json([
+                    "msg" => "No discount codes found for this organ",
+                    "statuscode" => 404
+                ], 404);
+            }
+
+            $couponIds = $coupons->pluck('ID')->toArray();
+
+            // Get all relevant meta data for these coupons
+            $metas = PostMetaModel::whereIn("post_id", $couponIds)
+                ->whereIn("meta_key", ["product_ids", "coupon_amount", "discount_type", "expiry_date", "usage_limit", "usage_count"])
+                ->get()
+                ->groupBy('post_id');
+
+            $results = [];
+            foreach($coupons as $coupon){
+                $couponMetas = $metas[$coupon->ID] ?? collect();
+
+                $usageCount = (int)($couponMetas->where('meta_key', 'usage_count')->first()->meta_value ?? 0);
+                $usageLimit = (int)($couponMetas->where('meta_key', 'usage_limit')->first()->meta_value ?? 1);
+                $expiryDate = $couponMetas->where('meta_key', 'expiry_date')->first()->meta_value ?? null;
+
+                $isExpired = $expiryDate && strtotime($expiryDate) < time();
+                $isUsed = $usageCount >= $usageLimit;
+
+                $status = 'active';
+                if($isUsed) $status = 'used';
+                if($isExpired) $status = 'expired';
+
+                // Apply filter
+                if($filter == 'used' && !$isUsed) continue;
+                if($filter == 'unused' && $isUsed) continue;
+                if($filter == 'active' && $status != 'active') continue;
+
+                $productId = $couponMetas->where('meta_key', 'product_ids')->first()->meta_value ?? null;
+                $product = null;
+
+                if($productId){
+                    $productPost = PostsModel::where("ID", $productId)
+                        ->where("post_type", "product")
+                        ->first(['ID', 'post_title']);
+
+                    if($productPost){
+                        $product = [
+                            "id" => $productPost->ID,
+                            "name" => $productPost->post_title
+                        ];
+                    }
+                }
+
+                $results[] = [
+                    "id" => $coupon->ID,
+                    "token" => $coupon->post_title,
+                    "product" => $product,
+                    "amount" => $couponMetas->where('meta_key', 'coupon_amount')->first()->meta_value ?? null,
+                    "discount_type" => $couponMetas->where('meta_key', 'discount_type')->first()->meta_value ?? null,
+                    "expiry_date" => $expiryDate,
+                    "usage_limit" => $usageLimit,
+                    "usage_count" => $usageCount,
+                    "status" => $status,
+                    "created_at" => $coupon->post_date
+                ];
+            }
+
+            return response()->json([
+                "msg" => "Discount codes retrieved successfully",
+                "data" => [
+                    "organ_id" => $organId,
+                    "prefix" => $prefix,
+                    "total" => count($results),
+                    "filter" => $filter,
+                    "codes" => $results
+                ],
+                "statuscode" => 200
+            ], 200);
 
         } catch(\Exception $e){
             return response()->json([
