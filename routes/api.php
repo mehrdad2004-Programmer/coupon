@@ -36,6 +36,8 @@ Route::prefix("v1")->middleware("auth:sanctum")->group(function(){
     // Get all groups
     Route::get("/get_groups", [PostsController::class, "getGroups"]);
 
+    Route::post("/delete_group", [PostsController::class, "deleteGroup"]);
+
 });
 
 Route::get("/unauthorized", [PostsController::class, "unauthorized"])->name('login');

@@ -250,10 +250,16 @@ public function addProductsToGroup(Request $request){
             ["meta_value" => $productIdsString]
         );
 
-        // For each product, create or update its discount amount
+        // For each product, store its discount amount and create token
         foreach($products as $product){
             $productId = $product['id'];
             $amount = $product['amount'];
+
+            // Store the discount amount for this product in the group
+            PostMetaModel::updateOrCreate(
+                ["post_id" => $groupId, "meta_key" => "_product_amount_" . $productId],
+                ["meta_value" => $amount]
+            );
 
             // Check if token already exists for this product
             $groupPrefix = PostMetaModel::where("post_id", $groupId)
@@ -306,7 +312,6 @@ public function addProductsToGroup(Request $request){
         ], 500);
     }
 }
-
     // User sends: { "group_id": 123, "product_ids": [123,456,789], "amount": 20, "discount_type": "percent" }
 // User sends: { "group_id": 123, "products": [{"id": 123, "amount": 20}, {"id": 456, "amount": 15}, {"id": 789, "amount": 10}], "discount_type": "percent" }
 // User sends: { "group_id": 123, "products": [{"id": 123, "amount": 20}, {"id": 456, "amount": 15}], "discount_type": "percent" }
@@ -461,8 +466,8 @@ public function updateProductsInGroup(Request $request){
 public function getProductsInGroup(Request $request){
     try{
         $groupId = $request->input('group_id');
-        $searchId = $request->input('product_id'); // search by product ID
-        $searchName = $request->input('product_name'); // search by product name
+        $searchId = $request->input('product_id');
+        $searchName = $request->input('product_name');
 
         // Check if group exists
         $group = PostsModel::where('ID', $groupId)
@@ -512,14 +517,19 @@ public function getProductsInGroup(Request $request){
             ], 404);
         }
 
-        // Get group discount info
-        $amount = PostMetaModel::where("post_id", $groupId)
-            ->where("meta_key", "coupon_amount")
-            ->first();
-
+        // Get group discount type
         $discountType = PostMetaModel::where("post_id", $groupId)
             ->where("meta_key", "discount_type")
             ->first();
+
+        // Get individual amount for each product
+        foreach($products as $product){
+            $amount = PostMetaModel::where("post_id", $groupId)
+                ->where("meta_key", "_product_amount_" . $product->ID)
+                ->first();
+
+            $product->discount_amount = $amount ? $amount->meta_value : null;
+        }
 
         return response()->json([
             "msg" => "Products retrieved successfully",
@@ -527,11 +537,15 @@ public function getProductsInGroup(Request $request){
                 "group_id" => $groupId,
                 "group_name" => $group->post_title,
                 "product_ids" => $productIds,
-                "products" => $products,
-                "discount" => [
-                    "amount" => $amount ? $amount->meta_value : null,
-                    "type" => $discountType ? $discountType->meta_value : null
-                ]
+                "discount_type" => $discountType ? $discountType->meta_value : null,
+                "products" => $products->map(function($product) {
+                    return [
+                        "id" => $product->ID,
+                        "title" => $product->post_title,
+                        "name" => $product->post_name,
+                        "discount_amount" => $product->discount_amount
+                    ];
+                })
             ],
             "statuscode" => 200
         ], 200);
@@ -924,6 +938,66 @@ public function login(){
         return response()->json([
             "msg" => "Login successful",
             "token" => $token,
+            "statuscode" => 200
+        ], 200);
+
+    } catch(\Exception $e){
+        return response()->json([
+            "msg" => $e->getMessage(),
+            "statuscode" => 500
+        ], 500);
+    }
+}
+
+public function deleteGroup(Request $request){
+    try{
+        $groupId = $request->input('group_id');
+
+        if(!$groupId){
+            return response()->json([
+                "msg" => "Group ID is required",
+                "statuscode" => 400
+            ], 400);
+        }
+
+        // Check if group exists
+        $group = PostsModel::where('ID', $groupId)
+            ->where('post_type', 'shop_coupon')
+            ->first();
+
+        if(!$group){
+            return response()->json([
+                "msg" => "Group not found",
+                "statuscode" => 404
+            ], 404);
+        }
+
+        // 1. Get group prefix to find related tokens
+        $prefix = PostMetaModel::where("post_id", $groupId)
+            ->where("meta_key", "_prefix")
+            ->first();
+
+        if($prefix){
+            // 2. Find all tokens with this prefix
+            $tokens = PostsModel::where("post_type", "shop_coupon")
+                ->where("post_title", "LIKE", $prefix->meta_value . "_%")
+                ->get();
+
+            // 3. Delete token meta and tokens
+            foreach($tokens as $token){
+                PostMetaModel::where("post_id", $token->ID)->delete();
+                $token->delete();
+            }
+        }
+
+        // 4. Delete group meta
+        PostMetaModel::where("post_id", $groupId)->delete();
+
+        // 5. Delete the group post
+        $group->delete();
+
+        return response()->json([
+            "msg" => "Group and all related data deleted successfully",
             "statuscode" => 200
         ], 200);
 
